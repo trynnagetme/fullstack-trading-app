@@ -1,0 +1,9 @@
+{
+    "scripts": {
+        "postinstall": "npm run copy-files",
+        "copy-files": "cp -R node_modules/charting_library/ static"
+    },
+    "dependencies": {
+        "lightweight-charts": "^5.1.0"
+    }
+}

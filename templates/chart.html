@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stock Chart with Volume | ApexCharts</title>
+    <!-- ApexCharts CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            background: #131722;
+            color: #d1d4dc;
+        }
+        .toolbar {
+            background: #1e222d;
+            border-bottom: 1px solid #2a2e39;
+            padding: 8px 16px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+        .symbol-selector {
+            background: #2a2e39;
+            border: 1px solid #363c4e;
+            color: #d1d4dc;
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 14px;
+            cursor: pointer;
+        }
+        .symbol-selector:hover {
+            background: #363c4e;
+        }
+        #chart {
+            margin: 16px;
+            background: #131722;
+        }
+        .loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #1e222d;
+            padding: 20px;
+            border-radius: 8px;
+            z-index: 1000;
+        }
+    </style>
+</head>
+<body>
+    <div class="toolbar">
+        <label>Symbol</label>
+        <select id="symbol-select" class="symbol-selector">
+            <option value="">Loading stocks...</option>
+        </select>
+    </div>
+    <div id="chart"></div>
+    <div id="loading" class="loading" style="display: none;">Loading chart data...</div>
+
+    <script>
+        let chart = null;
+        const symbolSelect = document.getElementById('symbol-select');
+        const loadingDiv = document.getElementById('loading');
+
+        function setLoading(show) {
+            loadingDiv.style.display = show ? 'flex' : 'none';
+        }
+
+        function showError(msg) {
+            console.error(msg);
+            alert(msg);
+        }
+
+        // Load stock list from backend
+        async function loadStockList() {
+            try {
+                const response = await fetch('/api/stocks');
+                if (!response.ok) throw new Error('Failed to load stocks');
+                const stocks = await response.json();
+                if (stocks.length === 0) {
+                    symbolSelect.innerHTML = '<option value="">No stocks found</option>';
+                    showError('No stocks in database. Run populate_stocks.py first.');
+                    return;
+                }
+                symbolSelect.innerHTML = stocks.map(s => 
+                    `<option value="${s.symbol}">${s.symbol} - ${s.name}</option>`
+                ).join('');
+                loadChartData(stocks[0].symbol);
+            } catch (error) {
+                console.error(error);
+                symbolSelect.innerHTML = '<option value="">Error loading stocks</option>';
+                showError('Could not load stock list.');
+            }
+        }
+
+        // Transform price data to ApexCharts candlestick format
+        function transformToCandles(data) {
+            return data.t.map((time, idx) => ({
+                x: new Date(time * 1000),
+                y: [data.o[idx], data.h[idx], data.l[idx], data.c[idx]]
+            }));
+        }
+
+        // Transform volume data to column series
+        // Determine color: green if close >= open, red otherwise
+        function transformToVolume(data) {
+            return data.t.map((time, idx) => ({
+                x: new Date(time * 1000),
+                y: data.v[idx],
+                fillColor: data.c[idx] >= data.o[idx] ? '#26a69a' : '#ef5350'
+            }));
+        }
+
+        async function loadChartData(symbol, resolution = 'D') {
+            setLoading(true);
+            try {
+                const to = Math.floor(Date.now() / 1000);
+                const from = to - (2 * 365 * 24 * 60 * 60); // 2 years
+                const url = `/api/bars/${symbol}?resolution=${resolution}&from=${from}&to=${to}`;
+                const response = await fetch(url);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+                
+                if (data.s === 'error') throw new Error(data.errmsg);
+                if (data.s === 'no_data' || !data.t || data.t.length === 0) {
+                    showError(`No price data for ${symbol}. Run populate_prices.py first.`);
+                    if (chart) chart.destroy();
+                    document.getElementById('chart').innerHTML = '<div style="color:white; text-align:center; margin-top:50px;">No data available</div>';
+                    return;
+                }
+
+                const candleData = transformToCandles(data);
+                const volumeData = transformToVolume(data);
+
+                // Chart configuration with two series and separate Y-axis for volume
+                const options = {
+                    series: [
+                        {
+                            name: `${symbol} Price`,
+                            type: 'candlestick',
+                            data: candleData
+                        },
+                        {
+                            name: 'Volume',
+                            type: 'column',
+                            data: volumeData
+                        }
+                    ],
+                    chart: {
+                        type: 'candlestick',  // primary type
+                        height: 600,
+                        background: '#131722',
+                        foreColor: '#d1d4dc',
+                        toolbar: { show: true, tools: { download: true, selection: true, zoom: true, zoomin: true, zoomout: true, pan: true, reset: true } },
+                        zoom: { enabled: true, type: 'x' },
+                        animations: { enabled: false }
+                    },
+                    title: { text: `${symbol} - Daily Candles with Volume`, align: 'left', style: { color: '#d1d4dc' } },
+                    xaxis: {
+                        type: 'datetime',
+                        labels: { style: { colors: '#d1d4dc' }, datetimeUTC: false },
+                        axisBorder: { color: '#2a2e39' },
+                        axisTicks: { color: '#2a2e39' }
+                    },
+                    yaxis: [
+                        {
+                            title: { text: 'Price', style: { color: '#d1d4dc' } },
+                            labels: { style: { colors: '#d1d4dc' } },
+                            tooltip: { enabled: true }
+                        },
+                        {
+                            opposite: true,
+                            title: { text: 'Volume', style: { color: '#d1d4dc' } },
+                            labels: { style: { colors: '#d1d4dc' }, formatter: (val) => {
+                                if (val >= 1e6) return (val / 1e6).toFixed(1) + 'M';
+                                if (val >= 1e3) return (val / 1e3).toFixed(1) + 'K';
+                                return val;
+                            } },
+                            tooltip: { enabled: true }
+                        }
+                    ],
+                    plotOptions: {
+                        candlestick: {
+                            colors: { upward: '#26a69a', downward: '#ef5350' },
+                            wick: { useFillColor: true }
+                        },
+                        bar: {
+                            columnWidth: '80%',
+                            borderRadius: 2,
+                            colors: { ranges: [] }  // we use per-data-point fillColor
+                        }
+                    },
+                    tooltip: {
+                        shared: true,
+                        custom: function({ series, seriesIndex, dataPointIndex, w }) {
+                            // Show volume with color
+                            const volume = w.globals.series[1][dataPointIndex];
+                            const priceColor = seriesIndex === 0 ? '#26a69a' : '#d1d4dc';
+                            return `
+                                <div style="padding: 8px; background: #1e222d; border: 1px solid #2a2e39;">
+                                    <div><strong>${new Date(w.globals.seriesX[0][dataPointIndex]).toLocaleDateString()}</strong></div>
+                                    <div>Open: ${w.globals.series[0][dataPointIndex][0]}</div>
+                                    <div>High: ${w.globals.series[0][dataPointIndex][1]}</div>
+                                    <div>Low: ${w.globals.series[0][dataPointIndex][2]}</div>
+                                    <div>Close: ${w.globals.series[0][dataPointIndex][3]}</div>
+                                    <div style="color: ${volume.fillColor || '#d1d4dc'}">Volume: ${volume.y.toLocaleString()}</div>
+                                </div>
+                            `;
+                        }
+                    },
+                    grid: { borderColor: '#2a2e39', row: { colors: ['transparent'] } },
+                    legend: { show: true, labels: { colors: '#d1d4dc' }, position: 'top' }
+                };
+
+                if (chart) {
+                    chart.updateOptions(options);
+                    chart.updateSeries(options.series);
+                } else {
+                    chart = new ApexCharts(document.querySelector("#chart"), options);
+                    chart.render();
+                }
+            } catch (error) {
+                console.error(error);
+                showError(`Failed to load data: ${error.message}`);
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        symbolSelect.addEventListener('change', (e) => {
+            if (e.target.value) loadChartData(e.target.value);
+        });
+
+        loadStockList();
+    </script>
+</body>
+</html>
