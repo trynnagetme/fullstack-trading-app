@@ -3,9 +3,306 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Document</title>
+    <title>Watchlist Manager</title>
+    <!-- SortableJS for drag & drop -->
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #131722;
+            color: #d1d4dc;
+            margin: 0;
+            padding: 2rem;
+        }
+        h1 { margin-bottom: 1rem; }
+        .controls {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+            align-items: center;
+            margin-bottom: 2rem;
+        }
+        .search-box {
+            background: #2a2e39;
+            border: 1px solid #363c4e;
+            color: #d1d4dc;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 14px;
+            width: 250px;
+        }
+        .add-section {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+            flex: 1;
+        }
+        #new-symbol {
+            background: #2a2e39;
+            border: 1px solid #363c4e;
+            color: #d1d4dc;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 14px;
+            width: 200px;
+        }
+        #add-btn {
+            background: #2962ff;
+            border: none;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        #add-btn:hover { background: #1e4bd2; }
+        .watchlist {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 1rem;
+        }
+        .card {
+            background: #1e222d;
+            border: 1px solid #2a2e39;
+            border-radius: 8px;
+            padding: 1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: grab;
+            transition: background 0.2s;
+        }
+        .card:active { cursor: grabbing; }
+        .card.dragging { opacity: 0.5; }
+        .symbol-info {
+            flex-grow: 1;
+            text-decoration: none;
+            color: inherit;
+        }
+        .symbol {
+            font-size: 1.4rem;
+            font-weight: bold;
+            color: #2962ff;
+        }
+        .name {
+            font-size: 0.9rem;
+            color: #787b86;
+        }
+        .remove-btn {
+            background: #ef5350;
+            border: none;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .remove-btn:hover { background: #d32f2f; }
+        .message {
+            margin-top: 1rem;
+            padding: 0.5rem;
+            border-radius: 4px;
+            background: #2a2e39;
+            display: none;
+        }
+        .error { color: #ef5350; }
+        .success { color: #26a69a; }
+        .no-results {
+            text-align: center;
+            padding: 2rem;
+            color: #787b86;
+        }
+    </style>
 </head>
 <body>
-    our new interface
+    <h1>📈 Your Watchlist</h1>
+    <div class="controls">
+        <div class="add-section">
+            <input type="text" id="new-symbol" placeholder="Symbol (e.g., AAPL)" autocomplete="off" list="stock-suggestions">
+            <datalist id="stock-suggestions"></datalist>
+            <button id="add-btn">➕ Add</button>
+        </div>
+        <input type="text" id="search-input" class="search-box" placeholder="🔍 Filter watchlist...">
+    </div>
+    <div id="watchlist-container" class="watchlist">
+        <div>Loading watchlist...</div>
+    </div>
+    <div id="message" class="message"></div>
+
+    <script>
+        let watchlistData = []; // array of {symbol, name}
+        let sortableInstance = null;
+        const watchlistDiv = document.getElementById('watchlist-container');
+        const newSymbolInput = document.getElementById('new-symbol');
+        const addBtn = document.getElementById('add-btn');
+        const searchInput = document.getElementById('search-input');
+        const messageDiv = document.getElementById('message');
+        let stockNameMap = {};
+
+        function showMessage(text, isError = false) {
+            messageDiv.textContent = text;
+            messageDiv.className = `message ${isError ? 'error' : 'success'}`;
+            messageDiv.style.display = 'block';
+            setTimeout(() => { messageDiv.style.display = 'none'; }, 3000);
+        }
+
+        async function loadStockNames() {
+            const response = await fetch('/api/stocks');
+            const stocks = await response.json();
+            const datalist = document.getElementById('stock-suggestions');
+            datalist.innerHTML = '';
+            stocks.forEach(s => {
+                stockNameMap[s.symbol] = s.name;
+                const option = document.createElement('option');
+                option.value = s.symbol;
+                option.textContent = `${s.symbol} - ${s.name}`;
+                datalist.appendChild(option);
+            });
+        }
+
+        async function loadWatchlist() {
+            const response = await fetch('/api/watchlist');
+            if (!response.ok) throw new Error('Failed to load watchlist');
+            const watchlist = await response.json();
+            watchlistData = watchlist.map(item => ({
+                symbol: item.symbol,
+                name: stockNameMap[item.symbol] || item.symbol
+            }));
+            renderWatchlist();
+        }
+
+        function renderWatchlist() {
+            const filter = searchInput.value.toLowerCase();
+            const filtered = watchlistData.filter(item =>
+                item.symbol.toLowerCase().includes(filter) ||
+                item.name.toLowerCase().includes(filter)
+            );
+            if (filtered.length === 0) {
+                watchlistDiv.innerHTML = '<div class="no-results">No matching symbols</div>';
+                return;
+            }
+            watchlistDiv.innerHTML = '';
+            filtered.forEach(item => {
+                const card = document.createElement('div');
+                card.className = 'card';
+                card.setAttribute('data-symbol', item.symbol);
+                card.innerHTML = `
+                    <a href="/chart?symbol=${item.symbol}" class="symbol-info">
+                        <div class="symbol">${item.symbol}</div>
+                        <div class="name">${item.name}</div>
+                    </a>
+                    <button class="remove-btn" data-symbol="${item.symbol}">Remove</button>
+                `;
+                watchlistDiv.appendChild(card);
+            });
+            attachRemoveEvents();
+            initSortable();
+        }
+
+        function attachRemoveEvents() {
+            document.querySelectorAll('.remove-btn').forEach(btn => {
+                btn.removeEventListener('click', handleRemove);
+                btn.addEventListener('click', handleRemove);
+            });
+        }
+
+        async function handleRemove(e) {
+            e.stopPropagation();
+            const symbol = e.target.dataset.symbol;
+            await removeSymbol(symbol);
+        }
+
+        async function removeSymbol(symbol) {
+            try {
+                const response = await fetch(`/api/watchlist/${symbol}`, { method: 'DELETE' });
+                if (!response.ok) throw new Error(await response.text());
+                showMessage(`Removed ${symbol} from watchlist`);
+                await loadWatchlist();
+            } catch (err) {
+                showMessage(err.message, true);
+            }
+        }
+
+        async function addSymbol(symbol) {
+            if (!symbol) return;
+            try {
+                const response = await fetch('/api/watchlist', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ symbol: symbol })
+                });
+                if (!response.ok) {
+                    const err = await response.json();
+                    throw new Error(err.detail || 'Failed to add');
+                }
+                showMessage(`Added ${symbol} to watchlist`);
+                newSymbolInput.value = '';
+                await loadWatchlist();
+            } catch (err) {
+                showMessage(err.message, true);
+            }
+        }
+
+        function initSortable() {
+            if (sortableInstance) sortableInstance.destroy();
+            sortableInstance = new Sortable(watchlistDiv, {
+                animation: 150,
+                handle: '.card',
+                ghostClass: 'dragging',
+                onEnd: async function() {
+                    // Get new order from DOM
+                    const newOrder = Array.from(watchlistDiv.querySelectorAll('.card')).map(
+                        card => card.getAttribute('data-symbol')
+                    );
+                    // Only save if order changed and filter is empty (otherwise confusing)
+                    if (searchInput.value === '') {
+                        await saveOrder(newOrder);
+                    } else {
+                        showMessage('Order saved only when no filter is active', true);
+                        await loadWatchlist(); // reload to reset order
+                    }
+                }
+            });
+        }
+
+        async function saveOrder(orderedSymbols) {
+            try {
+                const response = await fetch('/api/watchlist/reorder', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(orderedSymbols)
+                });
+                if (!response.ok) throw new Error('Failed to save order');
+                showMessage('Watchlist order saved');
+                // Update internal data order
+                watchlistData = orderedSymbols.map(sym => ({
+                    symbol: sym,
+                    name: stockNameMap[sym] || sym
+                }));
+            } catch (err) {
+                showMessage(err.message, true);
+                await loadWatchlist(); // revert
+            }
+        }
+
+        addBtn.addEventListener('click', () => {
+            const sym = newSymbolInput.value.trim().toUpperCase();
+            if (sym) addSymbol(sym);
+        });
+        newSymbolInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                const sym = newSymbolInput.value.trim().toUpperCase();
+                if (sym) addSymbol(sym);
+            }
+        });
+        searchInput.addEventListener('input', () => {
+            renderWatchlist();
+        });
+
+        async function init() {
+            await loadStockNames();
+            await loadWatchlist();
+        }
+        init();
+    </script>
 </body>
 </html>

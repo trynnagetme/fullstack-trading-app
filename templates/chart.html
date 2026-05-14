@@ -3,15 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Stock Chart with Volume | ApexCharts</title>
-    <!-- ApexCharts CDN -->
+    <title>Stock Chart | ApexCharts</title>
     <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
             background: #131722;
@@ -26,22 +21,71 @@
             gap: 16px;
             flex-wrap: wrap;
         }
-        .symbol-selector {
+        .home-btn {
             background: #2a2e39;
-            border: 1px solid #363c4e;
+            border: none;
             color: #d1d4dc;
             padding: 6px 12px;
             border-radius: 4px;
             font-size: 14px;
             cursor: pointer;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
         }
-        .symbol-selector:hover {
-            background: #363c4e;
+        .home-btn:hover { background: #363c4e; }
+        
+        /* Compact searchable dropdown */
+        .symbol-picker {
+            display: inline-flex;
+            align-items: center;
+            position: relative;
         }
-        #chart {
-            margin: 16px;
-            background: #131722;
+        #symbol-input {
+            background: #2a2e39;
+            border: 1px solid #363c4e;
+            color: #d1d4dc;
+            padding: 6px 30px 6px 12px;
+            border-radius: 4px;
+            font-size: 14px;
+            width: 260px;
+            cursor: pointer;
         }
+        .dropdown-arrow {
+            position: absolute;
+            right: 8px;
+            background: none;
+            border: none;
+            color: #787b86;
+            font-size: 14px;
+            cursor: pointer;
+            pointer-events: auto;
+        }
+        .dropdown-arrow:hover { color: #d1d4dc; }
+        .dropdown-list {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            background: #1e222d;
+            border: 1px solid #2a2e39;
+            border-radius: 4px;
+            max-height: 250px;
+            overflow-y: auto;
+            width: 100%;
+            z-index: 1000;
+            display: none;
+            margin-top: 4px;
+        }
+        .dropdown-list div {
+            padding: 8px 12px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .dropdown-list div:hover {
+            background: #2a2e39;
+        }
+        #chart { margin: 16px; background: #131722; min-height: 600px; }
         .loading {
             position: fixed;
             top: 50%;
@@ -56,51 +100,144 @@
 </head>
 <body>
     <div class="toolbar">
+        <a href="/" class="home-btn">🏠 Home</a>
         <label>Symbol</label>
-        <select id="symbol-select" class="symbol-selector">
-            <option value="">Loading stocks...</option>
-        </select>
+        <div class="symbol-picker">
+            <input type="text" id="symbol-input" placeholder="Search or select symbol..." autocomplete="off">
+            <button class="dropdown-arrow" id="dropdown-arrow">▼</button>
+            <div id="dropdown-list" class="dropdown-list"></div>
+        </div>
     </div>
     <div id="chart"></div>
     <div id="loading" class="loading" style="display: none;">Loading chart data...</div>
 
     <script>
         let chart = null;
-        const symbolSelect = document.getElementById('symbol-select');
+        let currentSymbol = null;
+        let allStocks = []; // array of {symbol, name}
+        let filteredStocks = [];
+        let isOpen = false;
+
+        const symbolInput = document.getElementById('symbol-input');
+        const dropdownList = document.getElementById('dropdown-list');
+        const arrowBtn = document.getElementById('dropdown-arrow');
         const loadingDiv = document.getElementById('loading');
 
-        function setLoading(show) {
-            loadingDiv.style.display = show ? 'flex' : 'none';
+        function setLoading(show) { loadingDiv.style.display = show ? 'flex' : 'none'; }
+        function showError(msg) { console.error(msg); alert(msg); }
+
+        // Render dropdown list from filteredStocks
+        function renderDropdown() {
+            if (!isOpen) return;
+            if (filteredStocks.length === 0) {
+                dropdownList.innerHTML = '<div style="padding:8px 12px;">No matching symbols</div>';
+            } else {
+                dropdownList.innerHTML = filteredStocks.map(s => 
+                    `<div data-symbol="${s.symbol}" data-name="${s.name}">${s.symbol} - ${s.name}</div>`
+                ).join('');
+                // Attach click handlers
+                dropdownList.querySelectorAll('div[data-symbol]').forEach(div => {
+                    div.addEventListener('click', () => {
+                        const sym = div.dataset.symbol;
+                        const name = div.dataset.name;
+                        selectSymbol(sym, name);
+                        closeDropdown();
+                    });
+                });
+            }
+            dropdownList.style.display = 'block';
         }
 
-        function showError(msg) {
-            console.error(msg);
-            alert(msg);
+        function openDropdown() {
+            if (isOpen) return;
+            isOpen = true;
+            filterStocks(); // refresh based on current input value
+            renderDropdown();
         }
 
-        // Load stock list from backend
+        function closeDropdown() {
+            isOpen = false;
+            dropdownList.style.display = 'none';
+        }
+
+        function toggleDropdown() {
+            if (isOpen) closeDropdown();
+            else openDropdown();
+        }
+
+        function selectSymbol(symbol, name) {
+            currentSymbol = symbol;
+            symbolInput.value = `${symbol} - ${name}`;
+            loadChartData(symbol);
+        }
+
+        function filterStocks() {
+            const query = symbolInput.value.toLowerCase();
+            // When typing, we also want to consider that the user might have typed a symbol
+            // So we filter all stocks
+            filteredStocks = allStocks.filter(s => 
+                s.symbol.toLowerCase().includes(query) || 
+                s.name.toLowerCase().includes(query)
+            );
+            if (isOpen) renderDropdown();
+        }
+
+        // Debounced filter on input
+        let debounceTimer;
+        symbolInput.addEventListener('input', () => {
+            clearTimeout(debounceTimer);
+            // If the input no longer matches the current symbol (e.g., user erased), reset current?
+            if (currentSymbol && !symbolInput.value.startsWith(currentSymbol)) {
+                // But don't auto-select, just filter
+            }
+            debounceTimer = setTimeout(() => {
+                filterStocks();
+                if (!isOpen && symbolInput.value.trim() !== '') {
+                    openDropdown(); // Auto-open dropdown when typing
+                }
+            }, 200);
+        });
+
+        arrowBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleDropdown();
+        });
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!symbolInput.contains(e.target) && !arrowBtn.contains(e.target) && !dropdownList.contains(e.target)) {
+                closeDropdown();
+            }
+        });
+
+        // Load all stocks from backend
         async function loadStockList() {
             try {
                 const response = await fetch('/api/stocks');
-                if (!response.ok) throw new Error('Failed to load stocks');
                 const stocks = await response.json();
-                if (stocks.length === 0) {
-                    symbolSelect.innerHTML = '<option value="">No stocks found</option>';
-                    showError('No stocks in database. Run populate_stocks.py first.');
-                    return;
+                allStocks = stocks;
+                filteredStocks = [...allStocks];
+                
+                const urlParams = new URLSearchParams(window.location.search);
+                const symbolParam = urlParams.get('symbol');
+                if (symbolParam && allStocks.some(s => s.symbol === symbolParam)) {
+                    currentSymbol = symbolParam;
+                    const stock = allStocks.find(s => s.symbol === currentSymbol);
+                    symbolInput.value = `${currentSymbol} - ${stock.name}`;
+                    loadChartData(currentSymbol);
+                } else if (allStocks.length > 0) {
+                    currentSymbol = allStocks[0].symbol;
+                    const stock = allStocks[0];
+                    symbolInput.value = `${currentSymbol} - ${stock.name}`;
+                    loadChartData(currentSymbol);
                 }
-                symbolSelect.innerHTML = stocks.map(s => 
-                    `<option value="${s.symbol}">${s.symbol} - ${s.name}</option>`
-                ).join('');
-                loadChartData(stocks[0].symbol);
             } catch (error) {
                 console.error(error);
-                symbolSelect.innerHTML = '<option value="">Error loading stocks</option>';
                 showError('Could not load stock list.');
             }
         }
 
-        // Transform price data to ApexCharts candlestick format
+        // Transform functions (same as before)
         function transformToCandles(data) {
             return data.t.map((time, idx) => ({
                 x: new Date(time * 1000),
@@ -108,8 +245,6 @@
             }));
         }
 
-        // Transform volume data to column series
-        // Determine color: green if close >= open, red otherwise
         function transformToVolume(data) {
             return data.t.map((time, idx) => ({
                 x: new Date(time * 1000),
@@ -118,19 +253,20 @@
             }));
         }
 
-        async function loadChartData(symbol, resolution = 'D') {
+        async function loadChartData(symbol) {
+            if (!symbol) return;
             setLoading(true);
             try {
                 const to = Math.floor(Date.now() / 1000);
-                const from = to - (2 * 365 * 24 * 60 * 60); // 2 years
-                const url = `/api/bars/${symbol}?resolution=${resolution}&from=${from}&to=${to}`;
+                const from = to - (2 * 365 * 24 * 60 * 60);
+                const url = `/api/bars/${symbol}?resolution=D&from=${from}&to=${to}`;
                 const response = await fetch(url);
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const data = await response.json();
                 
                 if (data.s === 'error') throw new Error(data.errmsg);
                 if (data.s === 'no_data' || !data.t || data.t.length === 0) {
-                    showError(`No price data for ${symbol}. Run populate_prices.py first.`);
+                    showError(`No daily data for ${symbol}. Run populate_prices.py first.`);
                     if (chart) chart.destroy();
                     document.getElementById('chart').innerHTML = '<div style="color:white; text-align:center; margin-top:50px;">No data available</div>';
                     return;
@@ -139,83 +275,32 @@
                 const candleData = transformToCandles(data);
                 const volumeData = transformToVolume(data);
 
-                // Chart configuration with two series and separate Y-axis for volume
                 const options = {
                     series: [
-                        {
-                            name: `${symbol} Price`,
-                            type: 'candlestick',
-                            data: candleData
-                        },
-                        {
-                            name: 'Volume',
-                            type: 'column',
-                            data: volumeData
-                        }
+                        { name: `${symbol} Price`, type: 'candlestick', data: candleData },
+                        { name: 'Volume', type: 'column', data: volumeData }
                     ],
                     chart: {
-                        type: 'candlestick',  // primary type
+                        type: 'candlestick',
                         height: 600,
                         background: '#131722',
                         foreColor: '#d1d4dc',
-                        toolbar: { show: true, tools: { download: true, selection: true, zoom: true, zoomin: true, zoomout: true, pan: true, reset: true } },
+                        toolbar: { show: true },
                         zoom: { enabled: true, type: 'x' },
                         animations: { enabled: false }
                     },
-                    title: { text: `${symbol} - Daily Candles with Volume`, align: 'left', style: { color: '#d1d4dc' } },
-                    xaxis: {
-                        type: 'datetime',
-                        labels: { style: { colors: '#d1d4dc' }, datetimeUTC: false },
-                        axisBorder: { color: '#2a2e39' },
-                        axisTicks: { color: '#2a2e39' }
-                    },
+                    title: { text: `${symbol} – Daily Candles with Volume`, align: 'left', style: { color: '#d1d4dc' } },
+                    xaxis: { type: 'datetime', labels: { style: { colors: '#d1d4dc' }, datetimeUTC: false }, axisBorder: { color: '#2a2e39' }, axisTicks: { color: '#2a2e39' } },
                     yaxis: [
-                        {
-                            title: { text: 'Price', style: { color: '#d1d4dc' } },
-                            labels: { style: { colors: '#d1d4dc' } },
-                            tooltip: { enabled: true }
-                        },
-                        {
-                            opposite: true,
-                            title: { text: 'Volume', style: { color: '#d1d4dc' } },
-                            labels: { style: { colors: '#d1d4dc' }, formatter: (val) => {
-                                if (val >= 1e6) return (val / 1e6).toFixed(1) + 'M';
-                                if (val >= 1e3) return (val / 1e3).toFixed(1) + 'K';
-                                return val;
-                            } },
-                            tooltip: { enabled: true }
-                        }
+                        { title: { text: 'Price', style: { color: '#d1d4dc' } }, labels: { style: { colors: '#d1d4dc' } } },
+                        { opposite: true, title: { text: 'Volume', style: { color: '#d1d4dc' } }, labels: { style: { colors: '#d1d4dc' }, formatter: (val) => { if (val >= 1e6) return (val / 1e6).toFixed(1) + 'M'; if (val >= 1e3) return (val / 1e3).toFixed(1) + 'K'; return val; } } }
                     ],
                     plotOptions: {
-                        candlestick: {
-                            colors: { upward: '#26a69a', downward: '#ef5350' },
-                            wick: { useFillColor: true }
-                        },
-                        bar: {
-                            columnWidth: '80%',
-                            borderRadius: 2,
-                            colors: { ranges: [] }  // we use per-data-point fillColor
-                        }
+                        candlestick: { colors: { upward: '#26a69a', downward: '#ef5350' }, wick: { useFillColor: true } },
+                        bar: { columnWidth: '80%', borderRadius: 2 }
                     },
-                    tooltip: {
-                        shared: true,
-                        custom: function({ series, seriesIndex, dataPointIndex, w }) {
-                            // Show volume with color
-                            const volume = w.globals.series[1][dataPointIndex];
-                            const priceColor = seriesIndex === 0 ? '#26a69a' : '#d1d4dc';
-                            return `
-                                <div style="padding: 8px; background: #1e222d; border: 1px solid #2a2e39;">
-                                    <div><strong>${new Date(w.globals.seriesX[0][dataPointIndex]).toLocaleDateString()}</strong></div>
-                                    <div>Open: ${w.globals.series[0][dataPointIndex][0]}</div>
-                                    <div>High: ${w.globals.series[0][dataPointIndex][1]}</div>
-                                    <div>Low: ${w.globals.series[0][dataPointIndex][2]}</div>
-                                    <div>Close: ${w.globals.series[0][dataPointIndex][3]}</div>
-                                    <div style="color: ${volume.fillColor || '#d1d4dc'}">Volume: ${volume.y.toLocaleString()}</div>
-                                </div>
-                            `;
-                        }
-                    },
-                    grid: { borderColor: '#2a2e39', row: { colors: ['transparent'] } },
+                    tooltip: { shared: true },
+                    grid: { borderColor: '#2a2e39' },
                     legend: { show: true, labels: { colors: '#d1d4dc' }, position: 'top' }
                 };
 
@@ -233,10 +318,6 @@
                 setLoading(false);
             }
         }
-
-        symbolSelect.addEventListener('change', (e) => {
-            if (e.target.value) loadChartData(e.target.value);
-        });
 
         loadStockList();
     </script>

@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount the local app.db file (or create it if missing)
+      - ./app.db:/app/app.db
+      # Optional: mount templates for live editing during development
+      - ./templates:/app/templates
+      - ./static:/app/static
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped

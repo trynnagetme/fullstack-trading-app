@@ -1,27 +1,101 @@
 import sqlite3
 import config
 from fastapi import FastAPI, Request, Query, HTTPException
-from fastapi.responses import JSONResponse
-from fastapi.templating import Jinja2Templates
+from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from datetime import datetime
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+from pydantic import BaseModel
+from typing import List
 
 app = FastAPI()
-templates = Jinja2Templates(directory="templates")
+
+# ----- Direct Jinja2 environment (no Starlette wrapper) -----
+jinja_env = Environment(
+    loader=FileSystemLoader('templates'),
+    autoescape=select_autoescape(['html', 'xml']),
+    auto_reload=True,
+    cache_size=0,
+    bytecode_cache=None
+)
+
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# -------------------- Existing root route --------------------
-@app.get("/")
-def read_root(request: Request):
+# -------------------- Watchlist landing page --------------------
+@app.get("/", response_class=HTMLResponse)
+async def landing_page(request: Request):
     conn = sqlite3.connect(config.DB_FILE)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute('SELECT id, symbol, name FROM stock')
+    cursor.execute("SELECT symbol, name FROM stock ORDER BY symbol")
+    all_stocks = {row["symbol"]: row["name"] for row in cursor.fetchall()}
+    conn.close()
+    
+    template = jinja_env.get_template("index.html")
+    html_content = template.render(request=request, all_stocks=all_stocks)
+    return HTMLResponse(content=html_content)
+
+# -------------------- Watchlist API --------------------
+class WatchlistAddRequest(BaseModel):
+    symbol: str
+
+@app.get("/api/watchlist")
+async def get_watchlist():
+    conn = sqlite3.connect(config.DB_FILE)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    # Order by order_index first, then added_at for any with same order (should not happen)
+    cursor.execute("SELECT symbol, added_at FROM watchlist ORDER BY order_index ASC, added_at ASC")
     rows = cursor.fetchall()
     conn.close()
-    return templates.TemplateResponse("index.html", {"request": request, "stocks": rows})
+    return [{"symbol": row["symbol"], "added_at": row["added_at"]} for row in rows]
 
-# -------------------- New API routes for TradingView --------------------
+@app.post("/api/watchlist")
+async def add_to_watchlist(request: WatchlistAddRequest):
+    symbol = request.symbol.upper()
+    conn = sqlite3.connect(config.DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT 1 FROM stock WHERE symbol = ?", (symbol,))
+    if not cursor.fetchone():
+        conn.close()
+        raise HTTPException(status_code=404, detail="Symbol not found in stock database")
+    # Get the maximum order_index to append at the end
+    cursor.execute("SELECT COALESCE(MAX(order_index), -1) FROM watchlist")
+    max_order = cursor.fetchone()[0]
+    try:
+        cursor.execute("INSERT INTO watchlist (symbol, order_index) VALUES (?, ?)", (symbol, max_order + 1))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.close()
+        raise HTTPException(status_code=409, detail="Symbol already in watchlist")
+    conn.close()
+    return {"status": "added", "symbol": symbol}
+
+@app.delete("/api/watchlist/{symbol}")
+async def remove_from_watchlist(symbol: str):
+    symbol = symbol.upper()
+    conn = sqlite3.connect(config.DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM watchlist WHERE symbol = ?", (symbol,))
+    conn.commit()
+    deleted = cursor.rowcount > 0
+    conn.close()
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Symbol not in watchlist")
+    return {"status": "removed", "symbol": symbol}
+
+@app.post("/api/watchlist/reorder")
+async def reorder_watchlist(symbols: List[str]):
+    """Expects a JSON array of symbols in the new order."""
+    conn = sqlite3.connect(config.DB_FILE)
+    cursor = conn.cursor()
+    for idx, sym in enumerate(symbols):
+        cursor.execute("UPDATE watchlist SET order_index = ? WHERE symbol = ?", (idx, sym.upper()))
+    conn.commit()
+    conn.close()
+    return {"status": "reordered"}
+
+# -------------------- API routes for stock data --------------------
 @app.get("/api/stocks")
 async def get_stocks():
     conn = sqlite3.connect(config.DB_FILE)
@@ -45,7 +119,6 @@ async def search_symbols(query: str = Query(..., min_length=1)):
     """, (f'%{query}%', f'%{query}%'))
     rows = cursor.fetchall()
     conn.close()
-    # Format as expected by TradingView: array of { symbol, full_name, description, exchange, ticker, type }
     result = []
     for row in rows:
         result.append({
@@ -68,10 +141,7 @@ async def resolve_symbol(symbol: str):
     conn.close()
     if not row:
         raise HTTPException(status_code=404, detail="Symbol not found")
-    
-    # Provide default values if columns missing
     exchange = row["exchange"] if "exchange" in row.keys() and row["exchange"] else "NYSE"
-    # TradingView symbol info structure
     return {
         "symbol": row["symbol"],
         "ticker": row["symbol"],
@@ -85,67 +155,49 @@ async def resolve_symbol(symbol: str):
         "pricescale": 100,
         "minmove2": 0,
         "fractional": False,
-        "has_intraday": False,          # We only have daily data
+        "has_intraday": False,
         "has_no_volume": False,
-        "supported_resolutions": ["D"],  # Only daily
+        "supported_resolutions": ["D"],
         "intraday_multipliers": [],
         "has_seconds": False,
         "has_daily": True,
-        "has_weekly_and_monthly": True   # Derived from daily
+        "has_weekly_and_monthly": True
     }
 
 @app.get("/api/bars/{symbol}")
 async def get_bars(
     symbol: str,
-    resolution: str = Query(...),
+    resolution: str = Query("D"),
     from_: int = Query(..., alias="from"),
     to: int = Query(...)
 ):
-    # Since we only have daily data, return no_data for other resolutions
+    # Only daily data is supported (free tier)
     if resolution not in ["D", "1D"]:
         return JSONResponse(content={"s": "no_data"})
     
     conn = sqlite3.connect(config.DB_FILE)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    
-    # Convert Unix timestamps (seconds) to date strings (YYYY-MM-DD)
-    from_dt = datetime.fromtimestamp(from_).strftime('%Y-%m-%d')
-    to_dt = datetime.fromtimestamp(to).strftime('%Y-%m-%d')
-    
-    # Get stock_id first
     cursor.execute("SELECT id FROM stock WHERE symbol = ?", (symbol.upper(),))
     stock_row = cursor.fetchone()
     if not stock_row:
         conn.close()
         return JSONResponse(content={"s": "error", "errmsg": "Symbol not found"})
     stock_id = stock_row["id"]
-    
-    # Query daily bars
+    from_dt = datetime.fromtimestamp(from_).strftime('%Y-%m-%d')
+    to_dt = datetime.fromtimestamp(to).strftime('%Y-%m-%d')
     cursor.execute("""
-        SELECT date, open, high, low, close, volume 
-        FROM stock_price 
+        SELECT date, open, high, low, close, volume
+        FROM stock_price
         WHERE stock_id = ? AND date BETWEEN ? AND ?
         ORDER BY date ASC
     """, (stock_id, from_dt, to_dt))
-    
     rows = cursor.fetchall()
     conn.close()
-    
     if not rows:
         return JSONResponse(content={"s": "no_data"})
-    
-    # Build response in TradingView's expected format
-    bars = {
-        "t": [],
-        "o": [],
-        "h": [],
-        "l": [],
-        "c": [],
-        "v": []
-    }
+    bars = {"t": [], "o": [], "h": [], "l": [], "c": [], "v": []}
     for row in rows:
-        # Parse date string to datetime then to Unix timestamp
         dt = datetime.strptime(row["date"], '%Y-%m-%d')
         bars["t"].append(int(dt.timestamp()))
         bars["o"].append(row["open"])
@@ -153,14 +205,11 @@ async def get_bars(
         bars["l"].append(row["low"])
         bars["c"].append(row["close"])
         bars["v"].append(row["volume"])
-    
     return {"s": "ok", **bars}
 
-# -------------------- New page for the chart --------------------
-@app.get("/chart")
+# -------------------- Chart page --------------------
+@app.get("/chart", response_class=HTMLResponse)
 async def chart_page(request: Request):
-    return templates.TemplateResponse("chart.html", {"request": request})
-
-@app.get("/test-chart")
-async def test_chart(request: Request):
-    return templates.TemplateResponse("test_chart.html", {"request": request})
+    template = jinja_env.get_template("chart.html")
+    html_content = template.render(request=request)
+    return HTMLResponse(content=html_content)
