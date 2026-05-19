@@ -1,10 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Watchlist Manager</title>
-    <!-- SortableJS for drag & drop -->
+    <title>Управление списком наблюдения</title>
     <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
     <style>
         body {
@@ -114,22 +113,22 @@
     </style>
 </head>
 <body>
-    <h1>📈 Your Watchlist</h1>
+    <h1>📈 Ваш список наблюдения</h1>
     <div class="controls">
         <div class="add-section">
-            <input type="text" id="new-symbol" placeholder="Symbol (e.g., AAPL)" autocomplete="off" list="stock-suggestions">
+            <input type="text" id="new-symbol" placeholder="Символ (например, AAPL)" autocomplete="off" list="stock-suggestions">
             <datalist id="stock-suggestions"></datalist>
-            <button id="add-btn">➕ Add</button>
+            <button id="add-btn">➕ Добавить</button>
         </div>
-        <input type="text" id="search-input" class="search-box" placeholder="🔍 Filter watchlist...">
+        <input type="text" id="search-input" class="search-box" placeholder="🔍 Фильтровать список...">
     </div>
     <div id="watchlist-container" class="watchlist">
-        <div>Loading watchlist...</div>
+        <div>Загрузка списка...</div>
     </div>
     <div id="message" class="message"></div>
 
     <script>
-        let watchlistData = []; // array of {symbol, name}
+        let watchlistData = [];
         let sortableInstance = null;
         const watchlistDiv = document.getElementById('watchlist-container');
         const newSymbolInput = document.getElementById('new-symbol');
@@ -161,7 +160,7 @@
 
         async function loadWatchlist() {
             const response = await fetch('/api/watchlist');
-            if (!response.ok) throw new Error('Failed to load watchlist');
+            if (!response.ok) throw new Error('Не удалось загрузить список наблюдения');
             const watchlist = await response.json();
             watchlistData = watchlist.map(item => ({
                 symbol: item.symbol,
@@ -177,7 +176,7 @@
                 item.name.toLowerCase().includes(filter)
             );
             if (filtered.length === 0) {
-                watchlistDiv.innerHTML = '<div class="no-results">No matching symbols</div>';
+                watchlistDiv.innerHTML = '<div class="no-results">Нет подходящих символов</div>';
                 return;
             }
             watchlistDiv.innerHTML = '';
@@ -190,7 +189,7 @@
                         <div class="symbol">${item.symbol}</div>
                         <div class="name">${item.name}</div>
                     </a>
-                    <button class="remove-btn" data-symbol="${item.symbol}">Remove</button>
+                    <button class="remove-btn" data-symbol="${item.symbol}">Удалить</button>
                 `;
                 watchlistDiv.appendChild(card);
             });
@@ -215,7 +214,7 @@
             try {
                 const response = await fetch(`/api/watchlist/${symbol}`, { method: 'DELETE' });
                 if (!response.ok) throw new Error(await response.text());
-                showMessage(`Removed ${symbol} from watchlist`);
+                showMessage(`Удалён ${symbol} из списка наблюдения`);
                 await loadWatchlist();
             } catch (err) {
                 showMessage(err.message, true);
@@ -232,9 +231,9 @@
                 });
                 if (!response.ok) {
                     const err = await response.json();
-                    throw new Error(err.detail || 'Failed to add');
+                    throw new Error(err.detail || 'Не удалось добавить');
                 }
-                showMessage(`Added ${symbol} to watchlist`);
+                showMessage(`Добавлен ${symbol} в список наблюдения`);
                 newSymbolInput.value = '';
                 await loadWatchlist();
             } catch (err) {
@@ -249,16 +248,14 @@
                 handle: '.card',
                 ghostClass: 'dragging',
                 onEnd: async function() {
-                    // Get new order from DOM
                     const newOrder = Array.from(watchlistDiv.querySelectorAll('.card')).map(
                         card => card.getAttribute('data-symbol')
                     );
-                    // Only save if order changed and filter is empty (otherwise confusing)
                     if (searchInput.value === '') {
                         await saveOrder(newOrder);
                     } else {
-                        showMessage('Order saved only when no filter is active', true);
-                        await loadWatchlist(); // reload to reset order
+                        showMessage('Порядок сохраняется только при отсутствии фильтра', true);
+                        await loadWatchlist();
                     }
                 }
             });
@@ -271,16 +268,15 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(orderedSymbols)
                 });
-                if (!response.ok) throw new Error('Failed to save order');
-                showMessage('Watchlist order saved');
-                // Update internal data order
+                if (!response.ok) throw new Error('Не удалось сохранить порядок');
+                showMessage('Порядок списка сохранён');
                 watchlistData = orderedSymbols.map(sym => ({
                     symbol: sym,
                     name: stockNameMap[sym] || sym
                 }));
             } catch (err) {
                 showMessage(err.message, true);
-                await loadWatchlist(); // revert
+                await loadWatchlist();
             }
         }
 

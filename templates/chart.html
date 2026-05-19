@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Stock Chart | ApexCharts</title>
+    <title>График акций | ApexCharts</title>
     <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -36,7 +36,6 @@
         }
         .home-btn:hover { background: #363c4e; }
         
-        /* Compact searchable dropdown */
         .symbol-picker {
             display: inline-flex;
             align-items: center;
@@ -100,21 +99,21 @@
 </head>
 <body>
     <div class="toolbar">
-        <a href="/" class="home-btn">🏠 Home</a>
-        <label>Symbol</label>
+        <a href="/" class="home-btn">🏠 Главная</a>
+        <label>Символ</label>
         <div class="symbol-picker">
-            <input type="text" id="symbol-input" placeholder="Search or select symbol..." autocomplete="off">
+            <input type="text" id="symbol-input" placeholder="Поиск или выбор символа..." autocomplete="off">
             <button class="dropdown-arrow" id="dropdown-arrow">▼</button>
             <div id="dropdown-list" class="dropdown-list"></div>
         </div>
     </div>
     <div id="chart"></div>
-    <div id="loading" class="loading" style="display: none;">Loading chart data...</div>
+    <div id="loading" class="loading" style="display: none;">Загрузка данных...</div>
 
     <script>
         let chart = null;
         let currentSymbol = null;
-        let allStocks = []; // array of {symbol, name}
+        let allStocks = [];
         let filteredStocks = [];
         let isOpen = false;
 
@@ -126,16 +125,14 @@
         function setLoading(show) { loadingDiv.style.display = show ? 'flex' : 'none'; }
         function showError(msg) { console.error(msg); alert(msg); }
 
-        // Render dropdown list from filteredStocks
         function renderDropdown() {
             if (!isOpen) return;
             if (filteredStocks.length === 0) {
-                dropdownList.innerHTML = '<div style="padding:8px 12px;">No matching symbols</div>';
+                dropdownList.innerHTML = '<div style="padding:8px 12px;">Нет подходящих символов</div>';
             } else {
                 dropdownList.innerHTML = filteredStocks.map(s => 
                     `<div data-symbol="${s.symbol}" data-name="${s.name}">${s.symbol} - ${s.name}</div>`
                 ).join('');
-                // Attach click handlers
                 dropdownList.querySelectorAll('div[data-symbol]').forEach(div => {
                     div.addEventListener('click', () => {
                         const sym = div.dataset.symbol;
@@ -151,7 +148,7 @@
         function openDropdown() {
             if (isOpen) return;
             isOpen = true;
-            filterStocks(); // refresh based on current input value
+            filterStocks();
             renderDropdown();
         }
 
@@ -173,8 +170,6 @@
 
         function filterStocks() {
             const query = symbolInput.value.toLowerCase();
-            // When typing, we also want to consider that the user might have typed a symbol
-            // So we filter all stocks
             filteredStocks = allStocks.filter(s => 
                 s.symbol.toLowerCase().includes(query) || 
                 s.name.toLowerCase().includes(query)
@@ -182,18 +177,13 @@
             if (isOpen) renderDropdown();
         }
 
-        // Debounced filter on input
         let debounceTimer;
         symbolInput.addEventListener('input', () => {
             clearTimeout(debounceTimer);
-            // If the input no longer matches the current symbol (e.g., user erased), reset current?
-            if (currentSymbol && !symbolInput.value.startsWith(currentSymbol)) {
-                // But don't auto-select, just filter
-            }
             debounceTimer = setTimeout(() => {
                 filterStocks();
                 if (!isOpen && symbolInput.value.trim() !== '') {
-                    openDropdown(); // Auto-open dropdown when typing
+                    openDropdown();
                 }
             }, 200);
         });
@@ -203,14 +193,12 @@
             toggleDropdown();
         });
 
-        // Close dropdown when clicking outside
         document.addEventListener('click', (e) => {
             if (!symbolInput.contains(e.target) && !arrowBtn.contains(e.target) && !dropdownList.contains(e.target)) {
                 closeDropdown();
             }
         });
 
-        // Load all stocks from backend
         async function loadStockList() {
             try {
                 const response = await fetch('/api/stocks');
@@ -233,11 +221,10 @@
                 }
             } catch (error) {
                 console.error(error);
-                showError('Could not load stock list.');
+                showError('Не удалось загрузить список акций.');
             }
         }
 
-        // Transform functions (same as before)
         function transformToCandles(data) {
             return data.t.map((time, idx) => ({
                 x: new Date(time * 1000),
@@ -266,9 +253,9 @@
                 
                 if (data.s === 'error') throw new Error(data.errmsg);
                 if (data.s === 'no_data' || !data.t || data.t.length === 0) {
-                    showError(`No daily data for ${symbol}. Run populate_prices.py first.`);
+                    showError(`Нет дневных данных для ${symbol}. Сначала запустите populate_prices.py.`);
                     if (chart) chart.destroy();
-                    document.getElementById('chart').innerHTML = '<div style="color:white; text-align:center; margin-top:50px;">No data available</div>';
+                    document.getElementById('chart').innerHTML = '<div style="color:white; text-align:center; margin-top:50px;">Нет данных</div>';
                     return;
                 }
 
@@ -277,8 +264,8 @@
 
                 const options = {
                     series: [
-                        { name: `${symbol} Price`, type: 'candlestick', data: candleData },
-                        { name: 'Volume', type: 'column', data: volumeData }
+                        { name: `${symbol} Цена`, type: 'candlestick', data: candleData },
+                        { name: 'Объём', type: 'column', data: volumeData }
                     ],
                     chart: {
                         type: 'candlestick',
@@ -289,11 +276,11 @@
                         zoom: { enabled: true, type: 'x' },
                         animations: { enabled: false }
                     },
-                    title: { text: `${symbol} – Daily Candles with Volume`, align: 'left', style: { color: '#d1d4dc' } },
+                    title: { text: `${symbol} – Дневные свечи с объёмом`, align: 'left', style: { color: '#d1d4dc' } },
                     xaxis: { type: 'datetime', labels: { style: { colors: '#d1d4dc' }, datetimeUTC: false }, axisBorder: { color: '#2a2e39' }, axisTicks: { color: '#2a2e39' } },
                     yaxis: [
-                        { title: { text: 'Price', style: { color: '#d1d4dc' } }, labels: { style: { colors: '#d1d4dc' } } },
-                        { opposite: true, title: { text: 'Volume', style: { color: '#d1d4dc' } }, labels: { style: { colors: '#d1d4dc' }, formatter: (val) => { if (val >= 1e6) return (val / 1e6).toFixed(1) + 'M'; if (val >= 1e3) return (val / 1e3).toFixed(1) + 'K'; return val; } } }
+                        { title: { text: 'Цена', style: { color: '#d1d4dc' } }, labels: { style: { colors: '#d1d4dc' } } },
+                        { opposite: true, title: { text: 'Объём', style: { color: '#d1d4dc' } }, labels: { style: { colors: '#d1d4dc' }, formatter: (val) => { if (val >= 1e6) return (val / 1e6).toFixed(1) + 'M'; if (val >= 1e3) return (val / 1e3).toFixed(1) + 'K'; return val; } } }
                     ],
                     plotOptions: {
                         candlestick: { colors: { upward: '#26a69a', downward: '#ef5350' }, wick: { useFillColor: true } },
@@ -313,7 +300,7 @@
                 }
             } catch (error) {
                 console.error(error);
-                showError(`Failed to load data: ${error.message}`);
+                showError(`Ошибка загрузки данных: ${error.message}`);
             } finally {
                 setLoading(false);
             }
